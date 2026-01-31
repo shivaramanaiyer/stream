@@ -1,0 +1,23 @@
+{
+  "streamsRoot": "..",
+  "copyExcludes": ["node_modules", ".venv", "dist", "tmp", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", ".DS_Store"],
+  "editor": { "command": "code", "openArgs": ["-n"] },
+  "setup": {
+    "enabled": true,
+    "steps": [
+      {
+        "type": "shell",
+        "name": "npm-install",
+        "command": "npm i",
+        "cwd": "{stream}"
+      }
+    ]
+  },
+  "db": {
+    "type": "postgres",
+    "cloneStrategy": "template",
+    "maxNameLength": 63,
+    "envFile": "backend/.env_development"
+  },
+  "naming": { "prefix": "stream", "slug": "stream" }
+}
