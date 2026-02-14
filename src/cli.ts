@@ -26,7 +26,7 @@ Usage:
   stream                 Interactive picker
   stream -               Open previous stream
   stream main|master     Open base repo
-  stream del <id>        Delete a stream
+  stream del [id]        Delete a stream (prompts when id is omitted)
   stream checkout|co <branch>  Open or create stream for branch
   stream cd <id>         Create/open stream and emit a cd marker
   stream list|ls         List streams
@@ -392,6 +392,43 @@ function renderStreamTable(entries: DisplayEntry[]): string {
   return ["Available streams:", header, ...lines].join("\n");
 }
 
+function renderDeleteStreamTable(streams: StreamInfo[]): string {
+  const nameWidth = Math.max(...streams.map((s) => s.name.length), "Name".length);
+  const statusWidth = Math.max(...streams.map((s) => s.status.length), "Status".length);
+  const header = `#   ${"Name".padEnd(nameWidth)}  ${"Status".padEnd(statusWidth)}  Path`;
+  const lines = streams.map((stream, index) => {
+    const name = stream.name.padEnd(nameWidth);
+    const status = stream.status.padEnd(statusWidth);
+    return `${String(index + 1).padEnd(3)} ${name}  ${status}  ${stream.path}`;
+  });
+  return ["Available streams to delete:", header, ...lines].join("\n");
+}
+
+async function pickStreamToDelete(config: StreamConfig, options: CliOptions): Promise<string | undefined> {
+  const streams = await listStreams(config);
+  if (streams.length === 0) {
+    logInfo("No streams found.");
+    return undefined;
+  }
+
+  logInfo(renderDeleteStreamTable(streams));
+  const answer = await prompt(
+    "Select a stream by number or enter a stream id to delete: ",
+    options.emitCd ? process.stderr : process.stdout
+  );
+  if (!answer) {
+    logInfo("Delete cancelled.");
+    return undefined;
+  }
+
+  const cleaned = answer.trim();
+  const num = Number(cleaned);
+  if (Number.isInteger(num) && num > 0 && num <= streams.length) {
+    return streams[num - 1].name;
+  }
+  return cleaned;
+}
+
 async function ensureCheckoutPrereqs(config: StreamConfig, options: CliOptions): Promise<void> {
   const gitPath = path.join(config.baseRepoPath, ".git");
   if (!(await pathExists(gitPath))) {
@@ -472,9 +509,12 @@ async function main(): Promise<void> {
   }
 
   if (command === "del") {
-    const id = rest[0];
-    if (!id) throw new Error("stream del requires an id");
-    const confirm = await prompt(`Delete stream ${id}? (y/N): `);
+    const id = rest[0] ?? (await pickStreamToDelete(config, options));
+    if (!id) return;
+    const confirm = await prompt(
+      `Delete stream ${id}? (y/N): `,
+      options.emitCd ? process.stderr : process.stdout
+    );
     if (confirm.toLowerCase() === "y") {
       await deleteStream(config, options, id);
     } else {

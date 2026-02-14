@@ -24,7 +24,7 @@ Global install uses the `prepare` script to build `dist/` automatically.
 - `stream`: interactive picker
 - `stream -`: open previous stream
 - `stream main|master`: open base repo
-- `stream del <id>`: delete a stream
+- `stream del [id]`: delete a stream (prompts when omitted)
 - `stream checkout <branch>`: open or create a stream for a branch
 - `stream list|ls`: list streams
 - `stream cd <id>`: create/open and emit a cd marker for shell integration
@@ -62,7 +62,7 @@ Create `stream.config.json` in the repo root:
 {
   "streamsRoot": "..",
   "copyExcludes": ["node_modules"],
-  "editor": { "command": "code", "openArgs": ["-n"] },
+  "editor": { "command": "auto", "openArgs": ["-n"] },
   "setup": {
     "enabled": true,
     "steps": []
@@ -76,6 +76,11 @@ Create `stream.config.json` in the repo root:
   "naming": { "prefix": "stream", "slug": "myrepo" }
 }
 ```
+
+Editor notes:
+- `editor.command: "auto"` picks `cursor` first, then `code`.
+- If `niri` is available, creating a new stream opens a new niri workspace, names it after the stream, and then launches the editor.
+- `stream del [id]` attempts to close the matching named niri workspace before deleting the stream files.
 
 To enable setup steps, add shell or dbClone steps. Example:
 

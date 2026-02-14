@@ -15,7 +15,7 @@ export const DEFAULT_EXCLUDES = [
 export const DEFAULT_SETUP_STEPS: SetupStep[] = [];
 
 export const DEFAULT_EDITOR = {
-  command: "code",
+  command: "auto",
   openArgs: ["-n"]
 };
 
