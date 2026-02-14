@@ -10,7 +10,7 @@ You are an agent tasked with generating a `stream.config.json` file for the Stre
 ## Defaults (Use unless the user specifies otherwise)
 - `streamsRoot`: parent of the base repo (`".."`).
 - `copyExcludes`: ["node_modules", ".venv", "dist", "tmp", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", ".DS_Store"].
-- `editor.command`: `"code"` and `openArgs`: `["-n"]`.
+- `editor.command`: `"auto"` and `openArgs`: `["-n"]` (`auto` prefers `cursor`, then `code`).
 - `setup.enabled`: `true`.
 - `setup.steps`: empty array (no setup by default).
 - `db.type`: `"postgres"`.
@@ -40,7 +40,7 @@ Examples to add to `setup.steps`:
 ## Questions to Ask (Only if needed)
 1) What is the base repo path (or confirm current repo root)?
 2) Should DB cloning be enabled? If yes, confirm source env file and naming preference.
-3) Which editor command should be used (`code` or `cursor`)?
+3) Which editor command should be used (`auto`, `cursor`, or `code`)?
 4) Are there any extra include/exclude paths?
 5) Should setup steps be modified, reordered, or skipped?
 
@@ -49,7 +49,7 @@ Examples to add to `setup.steps`:
 {
   "streamsRoot": "..",
   "copyExcludes": ["node_modules", ".venv", "dist", "tmp", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", ".DS_Store"],
-  "editor": { "command": "code", "openArgs": ["-n"] },
+  "editor": { "command": "auto", "openArgs": ["-n"] },
   "setup": { "enabled": true, "steps": [] },
   "db": { "type": "postgres", "cloneStrategy": "template", "maxNameLength": 63, "envFile": "backend/.env_development" },
   "naming": { "prefix": "stream", "slug": "stream" }

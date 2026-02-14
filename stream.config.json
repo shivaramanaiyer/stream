@@ -1,7 +1,7 @@
 {
   "streamsRoot": "..",
   "copyExcludes": ["node_modules", ".venv", "dist", "tmp", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", ".DS_Store"],
-  "editor": { "command": "code", "openArgs": ["-n"] },
+  "editor": { "command": "auto", "openArgs": ["-n"] },
   "setup": {
     "enabled": true,
     "steps": [

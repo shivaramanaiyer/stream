@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import path from "path";
+import { constants as fsConstants, promises as fs } from "fs";
 
 export interface ExecResult {
   code: number | null;
@@ -97,4 +99,51 @@ export function splitCommand(command: string): { cmd: string; args: string[] } {
   if (current.length > 0) parts.push(current);
 
   return { cmd: parts[0] ?? "", args: parts.slice(1) };
+}
+
+async function isExecutable(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasPathSeparator(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
+function windowsCandidateNames(command: string): string[] {
+  const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter((ext) => ext.length > 0);
+  if (path.extname(command).length > 0) {
+    return [command];
+  }
+  return [command, ...pathext.map((ext) => `${command}${ext}`)];
+}
+
+export async function commandExists(command: string): Promise<boolean> {
+  if (!command.trim()) return false;
+  if (hasPathSeparator(command)) {
+    const resolved = path.isAbsolute(command) ? command : path.resolve(command);
+    return isExecutable(resolved);
+  }
+
+  const pathValue = process.env.PATH ?? "";
+  const dirs = pathValue.split(path.delimiter).filter((dir) => dir.length > 0);
+  const commandNames = process.platform === "win32"
+    ? windowsCandidateNames(command)
+    : [command];
+
+  for (const dir of dirs) {
+    for (const name of commandNames) {
+      if (await isExecutable(path.join(dir, name))) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
