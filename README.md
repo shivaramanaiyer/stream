@@ -80,7 +80,7 @@ Create `stream.config.json` in the repo root:
 Editor notes:
 - `editor.command: "auto"` picks `cursor` first, then `code`.
 - If `niri` is available, creating a new stream opens a new niri workspace, names it after the stream, and then launches the editor.
-- `stream del [id]` attempts to close windows in the matching named niri workspace, run `unset-workspace-name`, and then delete stream files.
+- `stream del [id]` attempts to close the matching named niri workspace before deleting the stream files.
 
 To enable setup steps, add shell or dbClone steps. Example:
 
