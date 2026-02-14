@@ -2,7 +2,14 @@ import path from "path";
 import { promises as fs } from "fs";
 import type { CreateStreamOptions, StreamInfo, StreamStatus } from "./types";
 import { copyRepo } from "./copy";
-import { pickColor, applyPeacockColor, openEditor } from "./editor";
+import {
+  pickColor,
+  applyPeacockColor,
+  openEditor,
+  closeNiriWorkspace,
+  openNewNiriWorkspace,
+  resolveEditorCommand
+} from "./editor";
 import { logInfo, logWarn } from "./logger";
 import { runSetup } from "./setup";
 import { upsertStream, updateStreamStatus, readStatus, writeStatus } from "./status";
@@ -37,6 +44,7 @@ export async function createOrOpenStream(
   options: CreateStreamOptions
 ): Promise<StreamInfo> {
   const { config, id, cli } = options;
+  const editorCommand = await resolveEditorCommand(config.editor.command, cli.editorOverride);
   const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
   validateStreamName(name, config.naming.prefix);
 
@@ -73,7 +81,7 @@ export async function createOrOpenStream(
     status: "created",
     dbName: existing?.dbName,
     color,
-    editor: cli.editorOverride ?? config.editor.command,
+    editor: editorCommand,
     branch: baseBranch ?? existing?.branch
   };
 
@@ -82,10 +90,16 @@ export async function createOrOpenStream(
   }
 
   if (cli.dryRun) {
+    if (!exists) {
+      logInfo("[dry-run] Would open a new niri workspace (if available)");
+    }
     logInfo(`[dry-run] Would open editor ${info.editor}`);
   } else {
     await updateStreamStatus(config.baseRepoPath, name, "opening_editor");
-    await openEditor(info.editor ?? config.editor.command, config.editor.openArgs, streamPath);
+    if (!exists) {
+      await openNewNiriWorkspace(name);
+    }
+    await openEditor(editorCommand, config.editor.openArgs, streamPath);
   }
 
   const shouldRunSetup =
@@ -141,11 +155,12 @@ export async function createOrOpenStream(
 }
 
 export async function openBaseRepo(config: CreateStreamOptions["config"], cli: CreateStreamOptions["cli"]): Promise<void> {
+  const editorCommand = await resolveEditorCommand(config.editor.command, cli.editorOverride);
   if (cli.dryRun) {
-    logInfo(`[dry-run] Would open base repo ${config.baseRepoPath}`);
+    logInfo(`[dry-run] Would open base repo ${config.baseRepoPath} with ${editorCommand}`);
     return;
   }
-  await openEditor(cli.editorOverride ?? config.editor.command, config.editor.openArgs, config.baseRepoPath);
+  await openEditor(editorCommand, config.editor.openArgs, config.baseRepoPath);
 }
 
 export async function openLastStream(config: CreateStreamOptions["config"], cli: CreateStreamOptions["cli"]): Promise<StreamInfo> {
@@ -175,8 +190,10 @@ export async function deleteStream(
   }
   if (cli.dryRun) {
     logInfo(`[dry-run] Would remove ${streamPath}`);
+    logInfo(`[dry-run] Would close niri workspace '${name}' (if available)`);
     return;
   }
+  await closeNiriWorkspace(name);
   await fs.rm(streamPath, { recursive: true, force: true });
   const status = await readStatus(config.baseRepoPath);
   delete status.streams[name];
