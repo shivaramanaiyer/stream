@@ -68,3 +68,21 @@ export async function checkoutBranch(repoPath: string, branch: string): Promise<
     throw new Error(`git checkout failed with code ${result.code}`);
   }
 }
+
+export async function listWorkingTreeChanges(repoPath: string): Promise<string[] | undefined> {
+  const gitDir = path.join(repoPath, ".git");
+  if (!(await pathExists(gitDir))) return undefined;
+  const result = await runCommand(
+    "git",
+    ["-C", repoPath, "status", "--porcelain", "--untracked-files=all"],
+    { inheritStdout: false }
+  );
+  if (result.code !== 0) {
+    const message = result.stderr.trim() || `git status failed with code ${result.code}`;
+    throw new Error(`Unable to inspect changes in ${repoPath}: ${message}`);
+  }
+  return result.stdout
+    .split(/\r?\n/g)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+}

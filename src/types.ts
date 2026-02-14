@@ -81,6 +81,7 @@ export interface CliOptions {
   editorOverride?: string;
   dryRun: boolean;
   verbose: boolean;
+  force: boolean;
   emitCd?: boolean;
 }
 

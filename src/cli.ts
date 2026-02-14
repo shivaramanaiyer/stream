@@ -42,6 +42,7 @@ Options:
   --editor <command>     Override editor command
   --cd                   Emit cd marker for shell wrapper
   --dry-run              Show actions without running
+  --force                Bypass safety checks for destructive actions
   --verbose              Verbose logging
   -h, --help             Show help
 `);
@@ -71,6 +72,7 @@ function parseArgs(argv: string[]): { positional: string[]; options: CliOptions;
     excludes: [],
     dryRun: false,
     verbose: false,
+    force: false,
     emitCd: false
   };
   const positional: string[] = [];
@@ -109,6 +111,10 @@ function parseArgs(argv: string[]): { positional: string[]; options: CliOptions;
     }
     if (arg === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+    if (arg === "--force") {
+      options.force = true;
       continue;
     }
     if (arg === "--verbose") {

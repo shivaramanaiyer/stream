@@ -47,6 +47,7 @@ stream 1
 - `--editor <command>`: override editor command
 - `--cd`: emit a cd marker for shell wrapper
 - `--dry-run`: show actions without running
+- `--force`: bypass safety checks for destructive actions (e.g. delete with local changes)
 - `--verbose`: verbose logging
 
 Notes:

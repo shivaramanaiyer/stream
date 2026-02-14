@@ -13,7 +13,7 @@ import {
 import { logInfo, logWarn } from "./logger";
 import { runSetup } from "./setup";
 import { upsertStream, updateStreamStatus, readStatus, writeStatus } from "./status";
-import { getCurrentBranch } from "./git";
+import { getCurrentBranch, listWorkingTreeChanges } from "./git";
 import { nowIso } from "./utils/strings";
 import { pathExists } from "./utils/fs";
 
@@ -187,6 +187,19 @@ export async function deleteStream(
   if (!exists) {
     logInfo(`Stream ${name} not found at ${streamPath}`);
     return;
+  }
+  if (!cli.force) {
+    const changes = await listWorkingTreeChanges(streamPath);
+    if (changes && changes.length > 0) {
+      const preview = changes.slice(0, 5).map((line) => `  ${line}`).join("\n");
+      const suffix =
+        changes.length > 5
+          ? `\n  ...and ${changes.length - 5} more change(s).`
+          : "";
+      throw new Error(
+        `Refusing to delete ${name}: uncommitted or untracked changes detected.\n${preview}${suffix}\nRe-run with --force to delete anyway.`
+      );
+    }
   }
   if (cli.dryRun) {
     logInfo(`[dry-run] Would remove ${streamPath}`);
