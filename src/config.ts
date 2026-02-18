@@ -13,6 +13,11 @@ import { readJsonFile } from "./utils/fs";
 
 const CONFIG_NAME = "stream.config.json";
 
+function isPathInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
 async function findUp(startDir: string, filename: string): Promise<string | undefined> {
   let current = path.resolve(startDir);
   while (true) {
@@ -31,28 +36,35 @@ async function findUp(startDir: string, filename: string): Promise<string | unde
 }
 
 async function inferBaseRepoPath(configDir: string): Promise<string | undefined> {
-  const parentDir = path.dirname(configDir);
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(parentDir, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-
-  const statusFiles = entries.filter(
-    (entry) => entry.isFile() && entry.name.startsWith(".stream-")
-  );
-
-  for (const entry of statusFiles) {
-    const statusPath = path.join(parentDir, entry.name);
-    const status = await readJsonFile<StatusFile>(statusPath);
-    if (!status || !status.project || !status.streams) continue;
-    const match = Object.values(status.streams).find(
-      (stream) => path.resolve(stream.path) === configDir
-    );
-    if (match) {
-      return path.join(parentDir, status.project);
+  const targetDir = path.resolve(configDir);
+  let current = targetDir;
+  while (true) {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      entries = [];
     }
+
+    const statusFiles = entries.filter(
+      (entry) => entry.isFile() && entry.name.startsWith(".stream-")
+    );
+
+    for (const entry of statusFiles) {
+      const statusPath = path.join(current, entry.name);
+      const status = await readJsonFile<StatusFile>(statusPath);
+      if (!status || !status.project || !status.streams) continue;
+      const match = Object.values(status.streams).find(
+        (stream) => isPathInside(targetDir, path.resolve(stream.path))
+      );
+      if (match) {
+        return path.join(current, status.project);
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
 
   return undefined;
@@ -76,7 +88,7 @@ export async function resolveConfig(cwd: string): Promise<StreamConfig> {
   let baseRepoPath = rawConfig.baseRepoPath
     ? path.resolve(configDir, rawConfig.baseRepoPath)
     : path.resolve(configDir);
-  if (!rawConfig.baseRepoPath && configPath) {
+  if (!rawConfig.baseRepoPath) {
     const inferred = await inferBaseRepoPath(path.resolve(configDir));
     if (inferred) baseRepoPath = inferred;
   }

@@ -216,6 +216,17 @@ async function renameNiriWorkspace(name: string, preferredIndex?: number): Promi
   }
 }
 
+export async function renameFocusedNiriWorkspace(name: string): Promise<void> {
+  if (!name || !(await commandExists("niri"))) {
+    return;
+  }
+  try {
+    await renameNiriWorkspace(name);
+  } catch {
+    logWarn(`Warning: failed to rename niri workspace '${name}'.`);
+  }
+}
+
 export async function openNewNiriWorkspace(name?: string): Promise<void> {
   if (!(await commandExists("niri"))) {
     return;

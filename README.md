@@ -27,8 +27,11 @@ Global install uses the `prepare` script to build `dist/` automatically.
 - `stream del [id]`: delete a stream (prompts when omitted)
 - `stream checkout <branch>`: open or create a stream for a branch
 - `stream list|ls`: list streams
+- `stream status`: show current stream/base status
+- `stream setup`: in current stream (or base repo), rename focused niri workspace and open Cursor
 - `stream cd <id>`: create/open and emit a cd marker for shell integration
 - `stream shell`: print a shell function that auto-cd's after stream commands
+- `stream completion [bash|zsh|fish]`: print shell completion script
 - `stream init`: install shell integration for auto-cd
 - `stream config`: print resolved config
 
@@ -51,6 +54,7 @@ stream 1
 - `--verbose`: verbose logging
 
 Notes:
+- `stream` interactive picker supports fuzzy filtering and arrow-key selection.
 - `--include`/`--exclude` support glob-like patterns (`*`, `**`, `?`).
 - `stream checkout` requires `.git` in the stream; `.git` is copied by default unless excluded.
 - `stream checkout` creates streams named like `<prefix>-<slug>-<branch>-<n>` (branch is slugified).
@@ -80,7 +84,7 @@ Create `stream.config.json` in the repo root:
 
 Editor notes:
 - `editor.command: "auto"` picks `cursor` first, then `code`.
-- If `niri` is available, creating a new stream opens a new niri workspace, names it after the stream, and then launches the editor.
+- If `niri` is available, creating a new stream opens a new niri workspace, names it after the stream without the naming prefix (for example `myrepo-1` instead of `stream-myrepo-1`), and then launches the editor.
 - `stream del [id]` attempts to close the matching named niri workspace before deleting the stream files.
 
 To enable setup steps, add shell or dbClone steps. Example:

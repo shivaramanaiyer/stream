@@ -6,6 +6,7 @@ import {
   pickColor,
   applyPeacockColor,
   openEditor,
+  renameFocusedNiriWorkspace,
   closeNiriWorkspace,
   openNewNiriWorkspace,
   resolveEditorCommand
@@ -16,6 +17,8 @@ import { upsertStream, updateStreamStatus, readStatus, writeStatus } from "./sta
 import { getCurrentBranch, listWorkingTreeChanges } from "./git";
 import { nowIso } from "./utils/strings";
 import { pathExists } from "./utils/fs";
+
+const NIRI_WORKSPACE_NAME_MAX_LENGTH = 25;
 
 function resolveStreamName(id: string, prefix: string, slug: string): string {
   if (id.startsWith(`${prefix}-`)) {
@@ -36,8 +39,31 @@ function validateStreamName(name: string, prefix: string): void {
   }
 }
 
+function resolveNiriWorkspaceName(streamName: string, prefix: string): string {
+  const prefixWithDash = `${prefix}-`;
+  const rawName = streamName.startsWith(prefixWithDash)
+    ? streamName.slice(prefixWithDash.length)
+    : streamName;
+  if (rawName.length <= NIRI_WORKSPACE_NAME_MAX_LENGTH) {
+    return rawName;
+  }
+  return rawName.slice(0, NIRI_WORKSPACE_NAME_MAX_LENGTH);
+}
+
 async function ensureParentDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
+function resolveCurrentStream(streams: StreamInfo[], cwd: string): StreamInfo | undefined {
+  const matches = streams
+    .filter((stream) => isPathInside(cwd, stream.path))
+    .sort((a, b) => b.path.length - a.path.length);
+  return matches[0];
 }
 
 export async function createOrOpenStream(
@@ -46,6 +72,7 @@ export async function createOrOpenStream(
   const { config, id, cli } = options;
   const editorCommand = await resolveEditorCommand(config.editor.command, cli.editorOverride);
   const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
+  const niriWorkspaceName = resolveNiriWorkspaceName(name, config.naming.prefix);
   validateStreamName(name, config.naming.prefix);
 
   const streamPath = path.join(config.streamsRoot, name);
@@ -97,7 +124,7 @@ export async function createOrOpenStream(
   } else {
     await updateStreamStatus(config.baseRepoPath, name, "opening_editor");
     if (!exists) {
-      await openNewNiriWorkspace(name);
+      await openNewNiriWorkspace(niriWorkspaceName);
     }
     await openEditor(editorCommand, config.editor.openArgs, streamPath);
   }
@@ -181,6 +208,7 @@ export async function deleteStream(
   id: string
 ): Promise<void> {
   const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
+  const niriWorkspaceName = resolveNiriWorkspaceName(name, config.naming.prefix);
   validateStreamName(name, config.naming.prefix);
   const streamPath = path.join(config.streamsRoot, name);
   const exists = await pathExists(streamPath);
@@ -203,10 +231,13 @@ export async function deleteStream(
   }
   if (cli.dryRun) {
     logInfo(`[dry-run] Would remove ${streamPath}`);
-    logInfo(`[dry-run] Would close niri workspace '${name}' (if available)`);
+    logInfo(`[dry-run] Would close niri workspace '${niriWorkspaceName}' (if available)`);
     return;
   }
-  await closeNiriWorkspace(name);
+  await closeNiriWorkspace(niriWorkspaceName);
+  if (niriWorkspaceName !== name) {
+    await closeNiriWorkspace(name);
+  }
   await fs.rm(streamPath, { recursive: true, force: true });
   const status = await readStatus(config.baseRepoPath);
   delete status.streams[name];
@@ -225,6 +256,44 @@ export async function resolveStreamByBranch(
 ): Promise<StreamInfo | undefined> {
   const status = await readStatus(config.baseRepoPath);
   return Object.values(status.streams).find((s) => s.branch === branch);
+}
+
+export async function setupCurrentStreamEnvironment(
+  config: CreateStreamOptions["config"],
+  cli: CreateStreamOptions["cli"]
+): Promise<{ path: string; name: string }> {
+  const status = await readStatus(config.baseRepoPath);
+  const currentStream = resolveCurrentStream(Object.values(status.streams), process.cwd());
+  const inBaseRepo = isPathInside(process.cwd(), config.baseRepoPath);
+  if (!currentStream && !inBaseRepo) {
+    throw new Error("stream setup must be run from inside an existing stream or the base repo.");
+  }
+
+  const editorCommand = await resolveEditorCommand("cursor", cli.editorOverride);
+  const targetPath = currentStream ? currentStream.path : config.baseRepoPath;
+  const targetName = currentStream ? currentStream.name : "main";
+  const niriWorkspaceName = currentStream
+    ? resolveNiriWorkspaceName(currentStream.name, config.naming.prefix)
+    : config.naming.prefix;
+
+  if (cli.dryRun) {
+    logInfo(`[dry-run] Would rename focused niri workspace to '${niriWorkspaceName}'`);
+    logInfo(`[dry-run] Would open editor ${editorCommand} ${targetPath}`);
+    return { path: targetPath, name: targetName };
+  }
+
+  await renameFocusedNiriWorkspace(niriWorkspaceName);
+  await openEditor(editorCommand, config.editor.openArgs, targetPath);
+
+  if (currentStream) {
+    const stream = status.streams[currentStream.name];
+    if (stream) {
+      stream.editor = editorCommand;
+      status.lastActive = stream.name;
+    }
+    await writeStatus(config.baseRepoPath, status);
+  }
+  return { path: targetPath, name: targetName };
 }
 
 export function validateStreamNameOrThrow(name: string, prefix = "stream"): void {

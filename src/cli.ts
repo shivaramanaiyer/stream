@@ -2,7 +2,7 @@
 import readline from "readline";
 import path from "path";
 import { resolveConfig } from "./config";
-import type { CliOptions, StreamConfig, StreamInfo, StreamStatus } from "./types";
+import type { CliOptions, StatusFile, StreamConfig, StreamInfo, StreamStatus } from "./types";
 import { setVerbose, setLogToStderr, logError, logInfo, logWarn } from "./logger";
 import {
   createOrOpenStream,
@@ -10,13 +10,90 @@ import {
   listStreams,
   openBaseRepo,
   openLastStream,
-  resolveStreamByBranch
+  resolveStreamByBranch,
+  setupCurrentStreamEnvironment
 } from "./stream";
 import { checkoutBranch } from "./git";
 import { readStatus, writeStatus } from "./status";
 import { pathExists } from "./utils/fs";
 import { buildIncludePredicate } from "./utils/patterns";
 import { slugify } from "./utils/strings";
+
+const KNOWN_COMMANDS = [
+  "config",
+  "del",
+  "shell",
+  "init",
+  "list",
+  "ls",
+  "cd",
+  "checkout",
+  "co",
+  "status",
+  "setup",
+  "completion"
+];
+const KNOWN_FLAGS = [
+  "--no-setup",
+  "--no-install",
+  "--include",
+  "--exclude",
+  "--editor",
+  "--cd",
+  "--dry-run",
+  "--force",
+  "--verbose",
+  "-h",
+  "--help"
+];
+const FLAGS_WITH_VALUE = new Set(["--include", "--exclude", "--editor"]);
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix: number[][] = Array.from({ length: a.length + 1 }, () =>
+    Array.from({ length: b.length + 1 }, () => 0)
+  );
+  for (let i = 0; i <= a.length; i += 1) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j += 1) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+function suggestClosest(input: string, candidates: string[]): string | undefined {
+  const needle = input.toLowerCase();
+  let best: { candidate: string; score: number } | undefined;
+  for (const candidate of candidates) {
+    const hay = candidate.toLowerCase();
+    const score = hay.startsWith(needle) || needle.startsWith(hay) ? 0 : levenshtein(needle, hay);
+    if (!best || score < best.score) {
+      best = { candidate, score };
+    }
+  }
+  if (!best) return undefined;
+  const threshold = Math.max(2, Math.ceil(input.length * 0.4));
+  return best.score <= threshold ? best.candidate : undefined;
+}
+
+function suggestionSuffix(input: string, candidates: string[]): string {
+  const suggestion = suggestClosest(input, candidates);
+  return suggestion ? `. Did you mean '${suggestion}'?` : "";
+}
+
+function isNumericStreamId(value: string): boolean {
+  const num = Number(value);
+  return Number.isInteger(num) && num > 0;
+}
 
 function printHelp(): void {
   console.log(`Stream CLI
@@ -30,7 +107,10 @@ Usage:
   stream checkout|co <branch>  Open or create stream for branch
   stream cd <id>         Create/open stream and emit a cd marker
   stream list|ls         List streams
+  stream status          Show current stream/base status
+  stream setup           Setup current stream env (rename niri workspace + open cursor)
   stream shell           Print shell function for auto-cd
+  stream completion [shell]  Print shell completion script (bash|zsh|fish)
   stream init            Install shell integration for auto-cd
   stream config          Print resolved config
 
@@ -130,7 +210,8 @@ function parseArgs(argv: string[]): { positional: string[]; options: CliOptions;
       continue;
     }
     if (arg.startsWith("-")) {
-      throw new Error(`Unknown flag: ${arg}`);
+      const extra = suggestionSuffix(arg, KNOWN_FLAGS);
+      throw new Error(`Unknown flag: ${arg}${extra}`);
     }
     const cleaned = stripOuterQuotes(arg);
     if (cleaned.length === 0) continue;
@@ -153,37 +234,396 @@ function prompt(question: string, output: NodeJS.WritableStream = process.stdout
   });
 }
 
-async function interactivePicker(configPath: string, options: CliOptions): Promise<void> {
-  const config = await resolveConfig(configPath);
+type StreamSelection = { kind: "base" } | { kind: "stream"; id: string } | { kind: "create"; id: string };
+type PickerChoice = { selection: StreamSelection; label: string };
+type DeleteChoice = { id: string; label: string };
+
+function pickerOutput(options: CliOptions): NodeJS.WriteStream {
+  return options.emitCd ? process.stderr : process.stdout;
+}
+
+function fuzzyScore(query: string, text: string): number | undefined {
+  if (!query) return 0;
+  const source = text.toLowerCase();
+  const needle = query.toLowerCase();
+  let score = 0;
+  let cursor = -1;
+  for (let i = 0; i < needle.length; i += 1) {
+    const idx = source.indexOf(needle[i], cursor + 1);
+    if (idx === -1) return undefined;
+    score += idx - cursor - 1;
+    cursor = idx;
+  }
+  return score + (source.length - needle.length);
+}
+
+function buildPickerChoices(entries: DisplayEntry[], query: string): PickerChoice[] {
+  const trimmed = query.trim();
+  const normalized = trimmed.toLowerCase();
+  const filtered = entries
+    .map((entry) => {
+      const haystack = `${entry.name} ${entry.path} ${entry.status} ${entry.branch ?? ""}`;
+      return {
+        entry,
+        score: fuzzyScore(normalized, haystack)
+      };
+    })
+    .filter((item) => item.score !== undefined)
+    .sort((a, b) => (a.score ?? 0) - (b.score ?? 0) || a.entry.name.localeCompare(b.entry.name));
+
+  const choices = filtered.map((item) => {
+    const entry = item.entry;
+    if (entry.kind === "base") {
+      return {
+        selection: { kind: "base" } as StreamSelection,
+        label: `main [base] ${entry.path}`
+      };
+    }
+    const branchLabel = entry.branch ? ` branch:${entry.branch}` : "";
+    return {
+      selection: { kind: "stream", id: entry.name } as StreamSelection,
+      label: `${entry.name} [${entry.status}] ${entry.path}${branchLabel}`
+    };
+  });
+
+  const streamExists = entries.some(
+    (entry) => entry.kind === "stream" && entry.name.toLowerCase() === normalized
+  );
+  if (
+    trimmed &&
+    !streamExists &&
+    normalized !== "main" &&
+    normalized !== "base" &&
+    normalized !== "0"
+  ) {
+    choices.unshift({
+      selection: { kind: "create", id: trimmed },
+      label: `Create new stream '${trimmed}'`
+    });
+  }
+
+  return choices;
+}
+
+async function fuzzyPicker(entries: DisplayEntry[], options: CliOptions): Promise<StreamSelection | undefined> {
+  const output = pickerOutput(options);
+  if (!process.stdin.isTTY || !output.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return undefined;
+  }
+
+  const stdin = process.stdin;
+  const previousRaw = stdin.isRaw;
+  readline.emitKeypressEvents(stdin);
+  stdin.setRawMode(true);
+  stdin.resume();
+
+  let query = "";
+  let selected = 0;
+  let choices = buildPickerChoices(entries, query);
+  const maxVisible = 10;
+  let renderedLines = 0;
+
+  const refreshChoices = (): void => {
+    choices = buildPickerChoices(entries, query);
+    if (selected >= choices.length) selected = Math.max(choices.length - 1, 0);
+  };
+
+  const lineWidth = (): number => {
+    const width = output.columns ?? process.stdout.columns ?? 120;
+    return Math.max(20, width);
+  };
+
+  const clampLine = (line: string): string => {
+    const width = lineWidth();
+    if (line.length < width) return line;
+    if (width <= 4) return line.slice(0, width);
+    return `${line.slice(0, width - 3)}...`;
+  };
+
+  const render = (): void => {
+    if (renderedLines > 0) {
+      readline.moveCursor(output, 0, -renderedLines);
+      readline.cursorTo(output, 0);
+    }
+    readline.clearScreenDown(output);
+    const lines: string[] = [];
+    lines.push("Select stream (type to filter, Up/Down to move, Enter to select, Esc to cancel)");
+    lines.push(`Query: ${query}`);
+    if (choices.length === 0) {
+      lines.push("No matches. Type an id and press Enter to create.");
+      output.write(lines.map(clampLine).join("\n"));
+      output.write("\n");
+      renderedLines = lines.length;
+      return;
+    }
+    const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), choices.length - maxVisible));
+    const visible = choices.slice(start, start + maxVisible);
+    for (let i = 0; i < visible.length; i += 1) {
+      const absolute = start + i;
+      const marker = absolute === selected ? ">" : " ";
+      lines.push(`${marker} ${visible[i].label}`);
+    }
+    if (choices.length > maxVisible) {
+      lines.push(`${selected + 1}/${choices.length}`);
+    }
+    output.write(lines.map(clampLine).join("\n"));
+    output.write("\n");
+    renderedLines = lines.length;
+  };
+
+  return new Promise((resolve) => {
+    const finish = (result?: StreamSelection): void => {
+      stdin.off("keypress", onKeypress);
+      stdin.setRawMode(Boolean(previousRaw));
+      output.write("\n");
+      resolve(result);
+    };
+
+    const onKeypress = (str: string, key: readline.Key): void => {
+      if (key.ctrl && key.name === "c") {
+        finish(undefined);
+        return;
+      }
+      if (key.name === "escape") {
+        finish(undefined);
+        return;
+      }
+      if (key.name === "up") {
+        if (choices.length > 0) {
+          selected = selected === 0 ? choices.length - 1 : selected - 1;
+          render();
+        }
+        return;
+      }
+      if (key.name === "down") {
+        if (choices.length > 0) {
+          selected = (selected + 1) % choices.length;
+          render();
+        }
+        return;
+      }
+      if (key.name === "backspace") {
+        if (query.length > 0) {
+          query = query.slice(0, -1);
+          refreshChoices();
+          render();
+        }
+        return;
+      }
+      if (key.name === "return") {
+        if (choices.length > 0) {
+          finish(choices[selected].selection);
+          return;
+        }
+        const id = query.trim();
+        finish(id ? { kind: "create", id } : undefined);
+        return;
+      }
+      if (str && !key.ctrl && !key.meta) {
+        query += str;
+        refreshChoices();
+        render();
+      }
+    };
+
+    stdin.on("keypress", onKeypress);
+    render();
+  });
+}
+
+function buildDeleteChoices(streams: StreamInfo[], query: string): DeleteChoice[] {
+  const normalized = query.trim().toLowerCase();
+  return streams
+    .map((stream) => {
+      const haystack = `${stream.name} ${stream.path} ${stream.status} ${stream.branch ?? ""}`;
+      return {
+        stream,
+        score: fuzzyScore(normalized, haystack)
+      };
+    })
+    .filter((item) => item.score !== undefined)
+    .sort((a, b) => (a.score ?? 0) - (b.score ?? 0) || a.stream.name.localeCompare(b.stream.name))
+    .map((item) => {
+      const stream = item.stream;
+      const branchLabel = stream.branch ? ` branch:${stream.branch}` : "";
+      return {
+        id: stream.name,
+        label: `${stream.name} [${stream.status}] ${stream.path}${branchLabel}`
+      };
+    });
+}
+
+async function fuzzyDeletePicker(streams: StreamInfo[], options: CliOptions): Promise<string | undefined> {
+  const output = pickerOutput(options);
+  if (!process.stdin.isTTY || !output.isTTY || typeof process.stdin.setRawMode !== "function") {
+    return undefined;
+  }
+
+  const stdin = process.stdin;
+  const previousRaw = stdin.isRaw;
+  readline.emitKeypressEvents(stdin);
+  stdin.setRawMode(true);
+  stdin.resume();
+
+  let query = "";
+  let selected = 0;
+  let choices = buildDeleteChoices(streams, query);
+  const maxVisible = 10;
+  let renderedLines = 0;
+
+  const refreshChoices = (): void => {
+    choices = buildDeleteChoices(streams, query);
+    if (selected >= choices.length) selected = Math.max(choices.length - 1, 0);
+  };
+
+  const lineWidth = (): number => {
+    const width = output.columns ?? process.stdout.columns ?? 120;
+    return Math.max(20, width);
+  };
+
+  const clampLine = (line: string): string => {
+    const width = lineWidth();
+    if (line.length < width) return line;
+    if (width <= 4) return line.slice(0, width);
+    return `${line.slice(0, width - 3)}...`;
+  };
+
+  const render = (): void => {
+    if (renderedLines > 0) {
+      readline.moveCursor(output, 0, -renderedLines);
+      readline.cursorTo(output, 0);
+    }
+    readline.clearScreenDown(output);
+    const lines: string[] = [];
+    lines.push("Select stream to delete (type to filter, Up/Down to move, Enter to select, Esc to cancel)");
+    lines.push(`Query: ${query}`);
+    if (choices.length === 0) {
+      lines.push("No matches.");
+      output.write(lines.map(clampLine).join("\n"));
+      output.write("\n");
+      renderedLines = lines.length;
+      return;
+    }
+    const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), choices.length - maxVisible));
+    const visible = choices.slice(start, start + maxVisible);
+    for (let i = 0; i < visible.length; i += 1) {
+      const absolute = start + i;
+      const marker = absolute === selected ? ">" : " ";
+      lines.push(`${marker} ${visible[i].label}`);
+    }
+    if (choices.length > maxVisible) {
+      lines.push(`${selected + 1}/${choices.length}`);
+    }
+    output.write(lines.map(clampLine).join("\n"));
+    output.write("\n");
+    renderedLines = lines.length;
+  };
+
+  return new Promise((resolve) => {
+    const finish = (result?: string): void => {
+      stdin.off("keypress", onKeypress);
+      stdin.setRawMode(Boolean(previousRaw));
+      output.write("\n");
+      resolve(result);
+    };
+
+    const onKeypress = (str: string, key: readline.Key): void => {
+      if (key.ctrl && key.name === "c") {
+        finish(undefined);
+        return;
+      }
+      if (key.name === "escape") {
+        finish(undefined);
+        return;
+      }
+      if (key.name === "up") {
+        if (choices.length > 0) {
+          selected = selected === 0 ? choices.length - 1 : selected - 1;
+          render();
+        }
+        return;
+      }
+      if (key.name === "down") {
+        if (choices.length > 0) {
+          selected = (selected + 1) % choices.length;
+          render();
+        }
+        return;
+      }
+      if (key.name === "backspace") {
+        if (query.length > 0) {
+          query = query.slice(0, -1);
+          refreshChoices();
+          render();
+        }
+        return;
+      }
+      if (key.name === "return") {
+        if (choices.length > 0) {
+          finish(choices[selected].id);
+          return;
+        }
+        finish(undefined);
+        return;
+      }
+      if (str && !key.ctrl && !key.meta) {
+        query += str;
+        refreshChoices();
+        render();
+      }
+    };
+
+    stdin.on("keypress", onKeypress);
+    render();
+  });
+}
+
+function parsePromptSelection(answer: string, streams: StreamInfo[]): StreamSelection | undefined {
+  const cleaned = answer.trim();
+  if (!cleaned) return undefined;
+  const num = Number(cleaned);
+  if (cleaned === "0" || cleaned.toLowerCase() === "main" || cleaned.toLowerCase() === "base") {
+    return { kind: "base" };
+  }
+  if (Number.isInteger(num) && num > 0 && num <= streams.length) {
+    return { kind: "stream", id: streams[num - 1].name };
+  }
+  return { kind: "create", id: cleaned };
+}
+
+async function selectStreamTarget(
+  config: StreamConfig,
+  options: CliOptions
+): Promise<StreamSelection | undefined> {
   const status = await readStatus(config.baseRepoPath);
   const streams = Object.values(status.streams).sort((a, b) => a.name.localeCompare(b.name));
   const entries = buildDisplayEntries(config.baseRepoPath, streams, status.lastActive);
+  const output = pickerOutput(options);
 
   if (streams.length === 0) {
-    const id = await prompt(
-      "No streams found. Enter a new stream id: ",
-      options.emitCd ? process.stderr : process.stdout
-    );
-    if (!id) return;
-    await createOrOpenStream({ id, config, cli: options });
-    return;
+    const id = await prompt("No streams found. Enter a new stream id: ", output);
+    if (!id) return undefined;
+    return { kind: "create", id };
   }
 
-  logInfo(renderStreamTable(entries));
+  const fuzzySelection = await fuzzyPicker(entries, options);
+  if (fuzzySelection) return fuzzySelection;
+  if (process.stdin.isTTY && output.isTTY) return undefined;
 
-  const answer = await prompt(
-    "Select a stream by number or enter a new id: ",
-    options.emitCd ? process.stderr : process.stdout
-  );
-  if (!answer) return;
-  const cleaned = answer.trim();
-  const num = Number(cleaned);
-  if (cleaned === "0" || cleaned.toLowerCase() === "main" || cleaned.toLowerCase() === "base") {
+  logInfo(renderStreamTable(entries));
+  const answer = await prompt("Select a stream by number or enter a new id: ", output);
+  return parsePromptSelection(answer, streams);
+}
+
+async function interactivePicker(configPath: string, options: CliOptions): Promise<void> {
+  const config = await resolveConfig(configPath);
+  const selection = await selectStreamTarget(config, options);
+  if (!selection) return;
+  if (selection.kind === "base") {
     await openBaseRepo(config, options);
     return;
   }
-  const id = Number.isInteger(num) && num > 0 && num <= streams.length ? streams[num - 1].name : cleaned;
-  await createOrOpenStream({ id, config, cli: options });
+  await createOrOpenStream({ id: selection.id, config, cli: options });
 }
 
 async function interactivePickerWithResult(
@@ -191,35 +631,13 @@ async function interactivePickerWithResult(
   options: CliOptions
 ): Promise<{ kind: "base" | "stream"; path: string; name: string } | undefined> {
   const config = await resolveConfig(configPath);
-  const status = await readStatus(config.baseRepoPath);
-  const streams = Object.values(status.streams).sort((a, b) => a.name.localeCompare(b.name));
-  const entries = buildDisplayEntries(config.baseRepoPath, streams, status.lastActive);
-
-  if (streams.length === 0) {
-    const id = await prompt(
-      "No streams found. Enter a new stream id: ",
-      options.emitCd ? process.stderr : process.stdout
-    );
-    if (!id) return undefined;
-    const stream = await createOrOpenStream({ id, config, cli: options });
-    return { kind: "stream", path: stream.path, name: stream.name };
-  }
-
-  logInfo(renderStreamTable(entries));
-
-  const answer = await prompt(
-    "Select a stream by number or enter a new id: ",
-    options.emitCd ? process.stderr : process.stdout
-  );
-  if (!answer) return undefined;
-  const cleaned = answer.trim();
-  const num = Number(cleaned);
-  if (cleaned === "0" || cleaned.toLowerCase() === "main" || cleaned.toLowerCase() === "base") {
+  const selection = await selectStreamTarget(config, options);
+  if (!selection) return undefined;
+  if (selection.kind === "base") {
     await openBaseRepo(config, options);
     return { kind: "base", path: config.baseRepoPath, name: "main" };
   }
-  const id = Number.isInteger(num) && num > 0 && num <= streams.length ? streams[num - 1].name : cleaned;
-  const stream = await createOrOpenStream({ id, config, cli: options });
+  const stream = await createOrOpenStream({ id: selection.id, config, cli: options });
   return { kind: "stream", path: stream.path, name: stream.name };
 }
 
@@ -292,6 +710,70 @@ stream() {
   return $code
 }
 ${SHELL_MARKER_END}`;
+}
+
+type SupportedShell = "bash" | "zsh" | "fish";
+
+function normalizeShell(value: string | undefined): SupportedShell | undefined {
+  if (!value) return undefined;
+  const base = path.basename(value).toLowerCase();
+  if (base.includes("fish") || value.toLowerCase() === "fish") return "fish";
+  if (base.includes("zsh") || value.toLowerCase() === "zsh") return "zsh";
+  if (base.includes("bash") || value.toLowerCase() === "bash") return "bash";
+  return undefined;
+}
+
+function detectCurrentShell(): SupportedShell {
+  return normalizeShell(process.env.SHELL) ?? "bash";
+}
+
+function buildBashCompletionScript(): string {
+  return `# stream bash completion
+_stream_complete() {
+  local cur="\${COMP_WORDS[COMP_CWORD]}"
+  local args=()
+  local i
+  for ((i=1; i<COMP_CWORD; i++)); do
+    args+=("\${COMP_WORDS[i]}")
+  done
+  local suggestions
+  suggestions=$(command stream __complete "\${args[@]}" 2>/dev/null)
+  COMPREPLY=($(compgen -W "$suggestions" -- "$cur"))
+}
+complete -F _stream_complete stream`;
+}
+
+function buildZshCompletionScript(): string {
+  return `#compdef stream
+_stream_complete() {
+  local -a suggestions
+  suggestions=("\${(@f)\$(command stream __complete "\${words[@]:2}" 2>/dev/null)}")
+  compadd -a suggestions
+}
+compdef _stream_complete stream`;
+}
+
+function buildFishCompletionScript(): string {
+  return `function __stream_complete
+    set -l args (commandline -opc)
+    set -e args[1]
+    command stream __complete $args 2>/dev/null
+end
+complete -c stream -f -a "(__stream_complete)"`;
+}
+
+function buildCompletionScript(shell: SupportedShell): string {
+  if (shell === "fish") return buildFishCompletionScript();
+  if (shell === "zsh") return buildZshCompletionScript();
+  return buildBashCompletionScript();
+}
+
+function printCompletionScript(shellArg?: string): void {
+  const shell = normalizeShell(shellArg) ?? (shellArg ? undefined : detectCurrentShell());
+  if (!shell) {
+    throw new Error(`Unsupported shell for completion: ${shellArg}. Use bash, zsh, or fish.`);
+  }
+  console.log(buildCompletionScript(shell));
 }
 
 async function installShellIntegration(): Promise<void> {
@@ -410,6 +892,118 @@ function renderDeleteStreamTable(streams: StreamInfo[]): string {
   return ["Available streams to delete:", header, ...lines].join("\n");
 }
 
+function renderStatus(config: StreamConfig, status: StatusFile): string {
+  const streams = Object.values(status.streams).sort((a, b) => a.name.localeCompare(b.name));
+  const cwd = process.cwd();
+  const currentStream = streams.find((stream) => isPathInside(cwd, stream.path));
+  const inBase = isPathInside(cwd, config.baseRepoPath);
+  const counts = new Map<string, number>();
+  for (const stream of streams) {
+    counts.set(stream.status, (counts.get(stream.status) ?? 0) + 1);
+  }
+  const summary = Array.from(counts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, value]) => `${key}:${value}`)
+    .join(", ");
+  const lines = ["Stream status"];
+  lines.push(`Base repo: ${config.baseRepoPath}`);
+  lines.push(`Streams: ${streams.length}${summary ? ` (${summary})` : ""}`);
+  lines.push(`Last active: ${status.lastActive ?? "none"}`);
+  if (currentStream) {
+    lines.push("Current location: stream");
+    lines.push(`Name: ${currentStream.name}`);
+    lines.push(`Path: ${currentStream.path}`);
+    lines.push(`Status: ${currentStream.status}`);
+    if (currentStream.branch) lines.push(`Branch: ${currentStream.branch}`);
+    if (currentStream.dbName) lines.push(`Database: ${currentStream.dbName}`);
+  } else if (inBase) {
+    lines.push("Current location: base");
+    lines.push(`Path: ${config.baseRepoPath}`);
+  } else {
+    lines.push("Current location: outside managed paths");
+    lines.push(`Path: ${cwd}`);
+  }
+  return lines.join("\n");
+}
+
+function completionPositionals(args: string[]): string[] {
+  const positional: string[] = [];
+  let skipNext = false;
+  for (const arg of args) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (FLAGS_WITH_VALUE.has(arg)) {
+      skipNext = true;
+      continue;
+    }
+    if (arg === "-") {
+      positional.push(arg);
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    positional.push(arg);
+  }
+  return positional;
+}
+
+function streamCompletionIds(streams: StreamInfo[], config: StreamConfig): string[] {
+  const ids = new Set<string>();
+  const prefix = `${config.naming.prefix}-${config.naming.slug}-`;
+  for (const stream of streams) {
+    ids.add(stream.name);
+    if (stream.name.startsWith(prefix)) {
+      const maybeId = stream.name.slice(prefix.length);
+      if (isNumericStreamId(maybeId)) ids.add(maybeId);
+    }
+  }
+  return Array.from(ids).sort((a, b) => a.localeCompare(b));
+}
+
+async function completionCandidates(args: string[], cwd: string): Promise<string[]> {
+  if (args.length > 0 && FLAGS_WITH_VALUE.has(args[args.length - 1])) return [];
+  const config = await resolveConfig(cwd);
+  const status = await readStatus(config.baseRepoPath);
+  const streams = Object.values(status.streams).sort((a, b) => a.name.localeCompare(b.name));
+  const streamIds = streamCompletionIds(streams, config);
+  const shells: SupportedShell[] = ["bash", "zsh", "fish"];
+  const positional = completionPositionals(args);
+  const command = positional[0];
+  if (!command) {
+    return [...KNOWN_FLAGS, ...KNOWN_COMMANDS, "-", "main", "master", ...streamIds];
+  }
+  if (command === "completion") {
+    if (positional.length <= 1) return shells;
+    return [];
+  }
+  if (command === "del" || command === "cd") {
+    if (positional.length <= 1) return streamIds;
+    return [];
+  }
+  if (command === "checkout" || command === "co") {
+    return [];
+  }
+  if (
+    command === "config" ||
+    command === "shell" ||
+    command === "init" ||
+    command === "list" ||
+    command === "ls" ||
+    command === "status" ||
+    command === "setup" ||
+    command === "-" ||
+    command === "main" ||
+    command === "master"
+  ) {
+    return [];
+  }
+  if (command.startsWith(`${config.naming.prefix}-`) || isNumericStreamId(command)) {
+    return [];
+  }
+  return KNOWN_COMMANDS;
+}
+
 async function pickStreamToDelete(config: StreamConfig, options: CliOptions): Promise<string | undefined> {
   const streams = await listStreams(config);
   if (streams.length === 0) {
@@ -417,10 +1011,20 @@ async function pickStreamToDelete(config: StreamConfig, options: CliOptions): Pr
     return undefined;
   }
 
+  const fuzzySelection = await fuzzyDeletePicker(streams, options);
+  if (fuzzySelection) {
+    return fuzzySelection;
+  }
+  const output = pickerOutput(options);
+  if (process.stdin.isTTY && output.isTTY) {
+    logInfo("Delete cancelled.");
+    return undefined;
+  }
+
   logInfo(renderDeleteStreamTable(streams));
   const answer = await prompt(
     "Select a stream by number or enter a stream id to delete: ",
-    options.emitCd ? process.stderr : process.stdout
+    output
   );
   if (!answer) {
     logInfo("Delete cancelled.");
@@ -470,8 +1074,35 @@ function buildBranchStreamName(config: StreamConfig, branch: string, streams: St
   return `${config.naming.prefix}-${slug}-${nextId}`;
 }
 
+function ensureCommandOrId(command: string, config: StreamConfig): void {
+  if (
+    KNOWN_COMMANDS.includes(command) ||
+    command === "-" ||
+    command === "main" ||
+    command === "master" ||
+    command.startsWith(`${config.naming.prefix}-`) ||
+    isNumericStreamId(command)
+  ) {
+    return;
+  }
+  const suggestion = suggestionSuffix(command, [...KNOWN_COMMANDS, "main", "master"]);
+  const separator = suggestion ? " " : ". ";
+  throw new Error(
+    `Unknown command or stream id: ${command}${suggestion}${separator}Use 'stream <number>' or 'stream ${config.naming.prefix}-${config.naming.slug}-<number>'.`
+  );
+}
+
 async function main(): Promise<void> {
-  const { positional, options, help } = parseArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === "__complete") {
+    const suggestions = await completionCandidates(rawArgs.slice(1), process.cwd());
+    if (suggestions.length > 0) {
+      console.log(suggestions.join("\n"));
+    }
+    return;
+  }
+
+  const { positional, options, help } = parseArgs(rawArgs);
   if (help) {
     printHelp();
     return;
@@ -547,6 +1178,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "status") {
+    const status = await readStatus(config.baseRepoPath);
+    console.log(renderStatus(config, status));
+    return;
+  }
+
+  if (command === "setup") {
+    if (rest.length > 0) {
+      throw new Error("stream setup does not accept arguments");
+    }
+    const info = await setupCurrentStreamEnvironment(config, options);
+    if (options.emitCd) printCd(info.path);
+    return;
+  }
+
+  if (command === "completion") {
+    printCompletionScript(rest[0]);
+    return;
+  }
+
   if (command === "cd") {
     const id = rest[0];
     if (!id) throw new Error("stream cd requires an id");
@@ -587,6 +1238,7 @@ async function main(): Promise<void> {
     return;
   }
 
+  ensureCommandOrId(command, config);
   const info = await createOrOpenStream({ id: command, config, cli: options });
   if (options.emitCd) printCd(info.path);
 }
