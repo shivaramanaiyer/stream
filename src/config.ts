@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import type { Dirent } from "fs";
 import {
   DEFAULT_DB,
+  DEFAULT_DEFAULT_BRANCH,
   DEFAULT_EDITOR,
   DEFAULT_EXCLUDES,
   DEFAULT_SETUP_STEPS
@@ -117,6 +118,7 @@ export async function resolveConfig(cwd: string): Promise<StreamConfig> {
   };
 
   const copyExcludes = rawConfig.copyExcludes ?? DEFAULT_EXCLUDES;
+  const defaultBranch = rawConfig.defaultBranch ?? DEFAULT_DEFAULT_BRANCH;
 
   return {
     baseRepoPath,
@@ -125,6 +127,7 @@ export async function resolveConfig(cwd: string): Promise<StreamConfig> {
     editor,
     setup,
     db,
-    naming
+    naming,
+    defaultBranch
   };
 }

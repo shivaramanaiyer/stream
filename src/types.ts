@@ -72,6 +72,7 @@ export interface StreamConfig {
   setup: SetupConfig;
   db: DbConfig;
   naming: NamingConfig;
+  defaultBranch: string;
 }
 
 export interface CliOptions {
@@ -83,12 +84,14 @@ export interface CliOptions {
   verbose: boolean;
   force: boolean;
   emitCd?: boolean;
+  newBranch?: boolean;
 }
 
 export interface CreateStreamOptions {
   id: string;
   config: StreamConfig;
   cli: CliOptions;
+  postCopy?: (streamPath: string) => Promise<void>;
 }
 
 export interface DbEnv {

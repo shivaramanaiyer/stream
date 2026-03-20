@@ -69,7 +69,7 @@ function resolveCurrentStream(streams: StreamInfo[], cwd: string): StreamInfo | 
 export async function createOrOpenStream(
   options: CreateStreamOptions
 ): Promise<StreamInfo> {
-  const { config, id, cli } = options;
+  const { config, id, cli, postCopy } = options;
   const editorCommand = await resolveEditorCommand(config.editor.command, cli.editorOverride);
   const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
   const niriWorkspaceName = resolveNiriWorkspaceName(name, config.naming.prefix);
@@ -93,6 +93,10 @@ export async function createOrOpenStream(
     }
   } else {
     logInfo(`Opening existing stream ${name}...`);
+  }
+
+  if (!exists && postCopy && !cli.dryRun) {
+    await postCopy(streamPath);
   }
 
   const color = existing?.color ?? pickColor(name);

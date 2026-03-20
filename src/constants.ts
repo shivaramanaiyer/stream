@@ -26,6 +26,8 @@ export const DEFAULT_DB = {
   envFile: "backend/.env_development"
 } as const;
 
+export const DEFAULT_DEFAULT_BRANCH = "main";
+
 export const STATUS_VERSION = 1;
 
 export const COLOR_PALETTE = [

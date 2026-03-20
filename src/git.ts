@@ -31,11 +31,18 @@ async function getDefaultRemote(repoPath: string): Promise<string | undefined> {
   return remotes[0];
 }
 
-export async function checkoutBranch(repoPath: string, branch: string): Promise<void> {
+export async function checkoutBranch(
+  repoPath: string,
+  branch: string,
+  onCreate?: () => Promise<boolean>,
+  defaultBranch = "main"
+): Promise<void> {
   const gitDir = path.join(repoPath, ".git");
   if (!(await pathExists(gitDir))) {
     throw new Error(".git not found in stream; include .git to use checkout.");
   }
+
+  // If branch exists locally, just switch to it
   const localRef = `refs/heads/${branch}`;
   if (await branchExists(repoPath, localRef)) {
     const result = await runCommand("git", ["-C", repoPath, "checkout", branch], {
@@ -47,8 +54,11 @@ export async function checkoutBranch(repoPath: string, branch: string): Promise<
     return;
   }
 
+  // Fetch so remote refs reflect current state (copied .git may be stale)
   const remote = await getDefaultRemote(repoPath);
   if (remote) {
+    await runCommand("git", ["-C", repoPath, "fetch", remote], { inheritStdout: true });
+
     const remoteRef = `refs/remotes/${remote}/${branch}`;
     if (await branchExists(repoPath, remoteRef)) {
       const result = await runCommand("git", ["-C", repoPath, "checkout", "--track", `${remote}/${branch}`], {
@@ -61,6 +71,28 @@ export async function checkoutBranch(repoPath: string, branch: string): Promise<
     }
   }
 
+  // Branch doesn't exist locally or remotely — ask the caller what to do
+  if (!onCreate) {
+    throw new Error(`Branch "${branch}" does not exist locally or on remote. Pass -b to create it.`);
+  }
+  const shouldCreate = await onCreate();
+  if (!shouldCreate) return;
+
+  // Create from configured default branch so the new branch isn't behind
+  if (remote) {
+    const defaultRef = `refs/remotes/${remote}/${defaultBranch}`;
+    if (await branchExists(repoPath, defaultRef)) {
+      const result = await runCommand("git", ["-C", repoPath, "checkout", "-b", branch, `${remote}/${defaultBranch}`], {
+        inheritStdout: true
+      });
+      if (result.code !== 0) {
+        throw new Error(`git checkout failed with code ${result.code}`);
+      }
+      return;
+    }
+  }
+
+  // Fallback: create from current HEAD
   const result = await runCommand("git", ["-C", repoPath, "checkout", "-b", branch], {
     inheritStdout: true
   });

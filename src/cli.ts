@@ -197,6 +197,10 @@ function parseArgs(argv: string[]): { positional: string[]; options: CliOptions;
       options.force = true;
       continue;
     }
+    if (arg === "-b") {
+      options.newBranch = true;
+      continue;
+    }
     if (arg === "--verbose") {
       options.verbose = true;
       continue;
@@ -1220,20 +1224,36 @@ async function main(): Promise<void> {
     await ensureCheckoutPrereqs(config, options);
     const streams = await listStreams(config);
     const streamName = buildBranchStreamName(config, branch, streams);
-    const info = await createOrOpenStream({ id: streamName, config, cli: options });
-    try {
-      if (!options.dryRun) {
-        await checkoutBranch(info.path, branch);
-        const status = await readStatus(config.baseRepoPath);
-        const stream = status.streams[info.name];
-        if (stream) {
-          stream.branch = branch;
-        }
-        await writeStatus(config.baseRepoPath, status);
-      }
-    } catch (err: any) {
-      logWarn(`Checkout failed: ${err.message ?? err}`);
+
+    let onCreate: (() => Promise<boolean>) | undefined;
+    if (options.newBranch) {
+      onCreate = () => Promise.resolve(true);
+    } else if (process.stdin.isTTY) {
+      onCreate = async () => {
+        const out = pickerOutput(options);
+        const answer = await prompt(`Branch "${branch}" does not exist. Create it from latest ${config.defaultBranch}? [y/N] `, out);
+        return answer.toLowerCase() === "y";
+      };
     }
+
+    let checkoutError: Error | undefined;
+    const info = await createOrOpenStream({
+      id: streamName,
+      config,
+      cli: options,
+      postCopy: async (streamPath) => {
+        try {
+          await checkoutBranch(streamPath, branch, onCreate, config.defaultBranch);
+          const status = await readStatus(config.baseRepoPath);
+          const stream = status.streams[streamName];
+          if (stream) stream.branch = branch;
+          await writeStatus(config.baseRepoPath, status);
+        } catch (err: any) {
+          checkoutError = err;
+          logWarn(`Checkout failed: ${err.message ?? err}`);
+        }
+      }
+    });
     if (options.emitCd) printCd(info.path);
     return;
   }
