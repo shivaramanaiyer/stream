@@ -85,6 +85,7 @@ export interface CliOptions {
   force: boolean;
   emitCd?: boolean;
   newBranch?: boolean;
+  nameOverride?: string;
 }
 
 export interface CreateStreamOptions {

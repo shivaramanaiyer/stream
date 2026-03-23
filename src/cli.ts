@@ -39,6 +39,7 @@ const KNOWN_FLAGS = [
   "--include",
   "--exclude",
   "--editor",
+  "--name",
   "--cd",
   "--dry-run",
   "--force",
@@ -46,7 +47,7 @@ const KNOWN_FLAGS = [
   "-h",
   "--help"
 ];
-const FLAGS_WITH_VALUE = new Set(["--include", "--exclude", "--editor"]);
+const FLAGS_WITH_VALUE = new Set(["--include", "--exclude", "--editor", "--name"]);
 
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -120,6 +121,7 @@ Options:
   --no-setup             Skip setup steps
   --no-install           Alias for --no-setup
   --editor <command>     Override editor command
+  --name <name>          Override stream folder name (checkout only)
   --cd                   Emit cd marker for shell wrapper
   --dry-run              Show actions without running
   --force                Bypass safety checks for destructive actions
@@ -195,6 +197,13 @@ function parseArgs(argv: string[]): { positional: string[]; options: CliOptions;
     }
     if (arg === "--force") {
       options.force = true;
+      continue;
+    }
+    if (arg === "--name") {
+      const value = argv[i + 1];
+      if (!value) throw new Error("--name requires a value");
+      options.nameOverride = value;
+      i += 1;
       continue;
     }
     if (arg === "-b") {
@@ -1223,7 +1232,7 @@ async function main(): Promise<void> {
     }
     await ensureCheckoutPrereqs(config, options);
     const streams = await listStreams(config);
-    const streamName = buildBranchStreamName(config, branch, streams);
+    const streamName = options.nameOverride ?? buildBranchStreamName(config, branch, streams);
 
     let onCreate: (() => Promise<boolean>) | undefined;
     if (options.newBranch) {

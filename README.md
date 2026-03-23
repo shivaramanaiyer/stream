@@ -25,7 +25,7 @@ Global install uses the `prepare` script to build `dist/` automatically.
 - `stream -`: open previous stream
 - `stream main|master`: open base repo
 - `stream del [id]`: delete a stream (prompts when omitted)
-- `stream checkout <branch>`: open or create a stream for a branch
+- `stream checkout <branch>`: open or create a stream for a branch; use `-b` to create a new branch without prompting
 - `stream list|ls`: list streams
 - `stream status`: show current stream/base status
 - `stream setup`: in current stream (or base repo), rename focused niri workspace and open Cursor
@@ -48,6 +48,7 @@ stream 1
 - `--exclude <path>`: exclude path(s) when copying (repeatable)
 - `--no-setup` / `--no-install`: skip setup steps
 - `--editor <command>`: override editor command
+- `--name <name>`: override the stream folder name (`checkout` only)
 - `--cd`: emit a cd marker for shell wrapper
 - `--dry-run`: show actions without running
 - `--force`: bypass safety checks for destructive actions (e.g. delete with local changes)
@@ -57,7 +58,9 @@ Notes:
 - `stream` interactive picker supports fuzzy filtering and arrow-key selection.
 - `--include`/`--exclude` support glob-like patterns (`*`, `**`, `?`).
 - `stream checkout` requires `.git` in the stream; `.git` is copied by default unless excluded.
-- `stream checkout` creates streams named like `<prefix>-<slug>-<branch>-<n>` (branch is slugified).
+- `stream checkout` auto-names streams like `<prefix>-<slug>-<branch>-<n>` (branch is slugified); use `--name` to override.
+- `stream checkout <branch> -b` creates the branch from `defaultBranch` without prompting, like `git checkout -b`.
+- If `-b` is omitted and the branch doesn't exist, you'll be prompted whether to create it.
 
 ## Configuration
 
@@ -78,9 +81,12 @@ Create `stream.config.json` in the repo root:
     "maxNameLength": 63,
     "envFile": "backend/.env_development"
   },
-  "naming": { "prefix": "stream", "slug": "myrepo" }
+  "naming": { "prefix": "stream", "slug": "myrepo" },
+  "defaultBranch": "main"
 }
 ```
+
+`defaultBranch` controls which branch new branches are cut from when using `stream checkout -b` (defaults to `"main"`).
 
 Editor notes:
 - `editor.command: "auto"` picks `cursor` first, then `code`.
