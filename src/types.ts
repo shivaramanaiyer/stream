@@ -93,6 +93,7 @@ export interface CreateStreamOptions {
   config: StreamConfig;
   cli: CliOptions;
   postCopy?: (streamPath: string) => Promise<void>;
+  nameOverride?: string;
 }
 
 export interface DbEnv {

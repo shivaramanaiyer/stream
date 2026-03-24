@@ -1248,6 +1248,7 @@ async function main(): Promise<void> {
     let checkoutError: Error | undefined;
     const info = await createOrOpenStream({
       id: streamName,
+      nameOverride: options.nameOverride,
       config,
       cli: options,
       postCopy: async (streamPath) => {

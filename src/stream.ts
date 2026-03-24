@@ -69,11 +69,11 @@ function resolveCurrentStream(streams: StreamInfo[], cwd: string): StreamInfo | 
 export async function createOrOpenStream(
   options: CreateStreamOptions
 ): Promise<StreamInfo> {
-  const { config, id, cli, postCopy } = options;
+  const { config, id, cli, postCopy, nameOverride } = options;
   const editorCommand = await resolveEditorCommand(config.editor.command, cli.editorOverride);
-  const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
+  const name = nameOverride ?? resolveStreamName(id, config.naming.prefix, config.naming.slug);
   const niriWorkspaceName = resolveNiriWorkspaceName(name, config.naming.prefix);
-  validateStreamName(name, config.naming.prefix);
+  if (!nameOverride) validateStreamName(name, config.naming.prefix);
 
   const streamPath = path.join(config.streamsRoot, name);
   const exists = await pathExists(streamPath);
