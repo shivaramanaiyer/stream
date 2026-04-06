@@ -227,7 +227,9 @@ export async function cloneDatabase(
 
   logInfo(`Cloning database to ${dbName}...`);
 
-  if (strategy === "dump") {
+  if (strategy === "create") {
+    await createDatabase(dbName, pgEnv, stdoutToStderr);
+  } else if (strategy === "dump") {
     await dumpAndRestore(dbEnv.POSTGRES_DATABASE, dbName, pgEnv, stdoutToStderr);
   } else {
     try {

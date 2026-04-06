@@ -1,4 +1,4 @@
-export type CloneStrategy = "template" | "dump";
+export type CloneStrategy = "template" | "dump" | "create";
 
 export type StreamStatus =
   | "created"
