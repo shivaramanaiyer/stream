@@ -211,9 +211,24 @@ export async function deleteStream(
   cli: CreateStreamOptions["cli"],
   id: string
 ): Promise<void> {
-  const name = resolveStreamName(id, config.naming.prefix, config.naming.slug);
+  const status = await readStatus(config.baseRepoPath);
+  const requestedName = id.trim();
+  let fallbackName: string | undefined;
+  if (requestedName.startsWith(`${config.naming.prefix}-`)) {
+    fallbackName = requestedName;
+  } else {
+    try {
+      fallbackName = resolveStreamName(requestedName, config.naming.prefix, config.naming.slug);
+    } catch {
+      fallbackName = undefined;
+    }
+  }
+  const name = status.streams[requestedName]
+    ? requestedName
+    : fallbackName && status.streams[fallbackName]
+      ? fallbackName
+      : requestedName;
   const niriWorkspaceName = resolveNiriWorkspaceName(name, config.naming.prefix);
-  validateStreamName(name, config.naming.prefix);
   const streamPath = path.join(config.streamsRoot, name);
   const exists = await pathExists(streamPath);
   if (!exists) {
@@ -243,7 +258,6 @@ export async function deleteStream(
     await closeNiriWorkspace(name);
   }
   await fs.rm(streamPath, { recursive: true, force: true });
-  const status = await readStatus(config.baseRepoPath);
   delete status.streams[name];
   if (status.lastActive === name) delete status.lastActive;
   await writeStatus(config.baseRepoPath, status);
