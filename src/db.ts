@@ -3,15 +3,10 @@ import { promises as fs } from "fs";
 import { spawn } from "child_process";
 import type { CloneStrategy, DbEnv, StreamConfig } from "./types";
 import { readEnvFile, resolveEnvFileRelPath, updateEnvValue } from "./env";
-import { sanitizeDbName } from "./utils/strings";
+import { buildDbName, effectiveDbNameLength } from "./utils/strings";
 import { runCommand } from "./utils/exec";
 import { logDebug, logInfo, logWarn } from "./logger";
 import { ensureDir, pathExists, readFileIfExists } from "./utils/fs";
-
-function buildDbName(base: string, lane: string, maxLength: number): string {
-  const combined = `${base}__${lane}`;
-  return sanitizeDbName(combined, maxLength);
-}
 
 function requireEnv(env: Record<string, string>, key: string, envPath: string): string {
   const value = env[key];
@@ -216,11 +211,13 @@ export async function cloneDatabase(
     POSTGRES_PORT: env.POSTGRES_PORT
   };
 
-  const dbName = buildDbName(
-    dbEnv.POSTGRES_DATABASE,
-    streamName,
-    config.db.maxNameLength
-  );
+  const nameLimit = effectiveDbNameLength(config.db.maxNameLength);
+  if (nameLimit < config.db.maxNameLength) {
+    logDebug(
+      `Clamping db.maxNameLength ${config.db.maxNameLength} to ${nameLimit} to leave room for suffixes (_template, _test, ...).`
+    );
+  }
+  const dbName = buildDbName(dbEnv.POSTGRES_DATABASE, streamName, config.db.maxNameLength);
 
   const pgEnv = buildPgEnv(dbEnv);
   const strategy = strategyOverride ?? config.db.cloneStrategy;

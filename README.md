@@ -78,7 +78,7 @@ Create `stream.config.json` in the repo root:
   "db": {
     "type": "postgres",
     "cloneStrategy": "template",
-    "maxNameLength": 63,
+    "maxNameLength": 50,
     "envFile": "backend/.env_development"
   },
   "naming": { "prefix": "stream", "slug": "myrepo" },
@@ -87,6 +87,13 @@ Create `stream.config.json` in the repo root:
 ```
 
 `defaultBranch` controls which branch new branches are cut from when using `stream checkout -b` (defaults to `"main"`).
+
+`db.maxNameLength` caps the generated database name (defaults to `50`). Postgres truncates
+identifiers at 63 characters, and other tools append their own suffixes to the name
+(`_template`, `_test`, pytest-xdist's `_gw0`, numeric copies), so the value is always clamped
+to `63 - 13 = 50` to leave room for them. When `<database>__<stream>` is longer than the cap,
+both halves are truncated and a short hash of the full name is appended so streams on
+similarly-named branches still get distinct databases.
 
 Editor notes:
 - `editor.command: "auto"` picks `cursor` first, then `code`.

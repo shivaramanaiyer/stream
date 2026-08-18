@@ -16,7 +16,7 @@
   "db": {
     "type": "postgres",
     "cloneStrategy": "template",
-    "maxNameLength": 63,
+    "maxNameLength": 50,
     "envFile": "backend/.env_development"
   },
   "naming": { "prefix": "stream", "slug": "stream" }

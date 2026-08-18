@@ -14,7 +14,8 @@ You are an agent tasked with generating a `stream.config.json` file for the Stre
 - `setup.enabled`: `true`.
 - `setup.steps`: empty array (no setup by default).
 - `db.type`: `"postgres"`.
-- `db.cloneStrategy`: `"template"` and `db.maxNameLength`: `63`.
+- `db.cloneStrategy`: `"template"` and `db.maxNameLength`: `50`.
+  - `db.maxNameLength` is clamped to 50 (63-char Postgres limit minus 13 reserved for suffixes like `_template`/`_test`); longer names are truncated and given a hash suffix to stay unique.
 - `db.envFile`: `"backend/.env_development"`.
 - `naming.prefix`: `"stream"`; `naming.slug`: derived from the base repo folder name, lowercased with non-alphanumerics replaced by `-`.
 
@@ -51,7 +52,7 @@ Examples to add to `setup.steps`:
   "copyExcludes": ["node_modules", ".venv", "dist", "tmp", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", ".DS_Store"],
   "editor": { "command": "auto", "openArgs": ["-n"] },
   "setup": { "enabled": true, "steps": [] },
-  "db": { "type": "postgres", "cloneStrategy": "template", "maxNameLength": 63, "envFile": "backend/.env_development" },
+  "db": { "type": "postgres", "cloneStrategy": "template", "maxNameLength": 50, "envFile": "backend/.env_development" },
   "naming": { "prefix": "stream", "slug": "stream" }
 }
 ```

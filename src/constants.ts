@@ -22,7 +22,7 @@ export const DEFAULT_EDITOR = {
 export const DEFAULT_DB = {
   type: "postgres",
   cloneStrategy: "template",
-  maxNameLength: 63,
+  maxNameLength: 50,
   envFile: "backend/.env_development"
 } as const;
 
